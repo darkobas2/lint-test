@@ -1,24 +1,141 @@
+# shared-configs/.yamllint
+#
+# Usage in repos:
+#     yamllint_config_url: 'https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint'
+
 extends: default
-ignore: |
-  charts/*/templates/
-  .git/
-  node_modules/
+
+# Ignore patterns
+ignore:
+  # Helm templates use Go templating - not valid YAML
+  - charts/*/templates/
+  - '**/templates/*.yaml'
+  - '**/templates/*.yml'
+  # Vendor directories
+  - vendor/
+  - node_modules/
+  # Generated files
+  - '*.generated.yaml'
+  - '*.generated.yml'
+
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+  - '.yamllint'
+
 rules:
-  line-length:
-    max: 120
-    # Allows long URLs, paths, or shell commands to exceed the limit
-    allow-non-breakable-words: true
-    # Ensures that even if a line is long, it doesn't fail if it's a comment
-    allow-non-breakable-inline-mappings: true
+  # ============================================================
+  # Line length - disabled to avoid arbitrary breaks
+  # yamlfmt handles formatting; yamllint just validates
+  # ============================================================
+  line-length: disable
+
+  # ============================================================
+  # Document start (---) - not required
+  # ============================================================
+  document-start: disable
+
+  # ============================================================
+  # Truthy values - allow 'yes', 'no', 'on', 'off' as values
+  # but not as keys (prevents accidental boolean keys)
+  # ============================================================
+  truthy:
+    check-keys: true
+    allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']
+
+  # ============================================================
+  # Comments - require space after #
+  # ============================================================
+  comments:
+    require-starting-space: true
+    ignore-shebangs: true
+    min-spaces-from-content: 1
+
+  # ============================================================
+  # Braces - allow some flexibility for inline dicts
+  # ============================================================
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+
+  # ============================================================
+  # Brackets - allow some flexibility for inline lists
+  # ============================================================
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+
+  # ============================================================
+  # Colons - standard spacing
+  # ============================================================
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: 1
+
+  # ============================================================
+  # Commas - standard spacing
+  # ============================================================
+  commas:
+    max-spaces-before: 0
+    min-spaces-after: 1
+    max-spaces-after: 1
+
+  # ============================================================
+  # Indentation - 2 spaces, consistent sequences
+  # ============================================================
   indentation:
     spaces: 2
-    indent-sequences: true
-  new-lines:
-    type: unix
-  trailing-spaces: enable
+    indent-sequences: consistent
+    check-multi-line-strings: false
+
+  # ============================================================
+  # Empty lines - limit consecutive blank lines
+  # ============================================================
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 1
+
+  # ============================================================
+  # Key duplicates - error on duplicate keys
+  # ============================================================
+  key-duplicates: enable
+
+  # ============================================================
+  # New line at end of file
+  # ============================================================
   new-line-at-end-of-file: enable
-  document-start: disable
-  comments:
-    min-spaces-from-content: 1
-  truthy:
-    allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']
+
+  # ============================================================
+  # Trailing spaces - handled by pre-commit hook
+  # ============================================================
+  trailing-spaces: enable
+
+  # ============================================================
+  # Octal values - warn on ambiguous octals like 0777
+  # ============================================================
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: false
+
+  # ============================================================
+  # Quoted strings - don't enforce, allow flexibility
+  # ============================================================
+  quoted-strings: disable
+
+  # ============================================================
+  # Empty values - allow empty values (common in K8s)
+  # ============================================================
+  empty-values: disable
+
+  # ============================================================
+  # Anchors - allow YAML anchors/aliases
+  # ============================================================
+  anchors:
+    forbid-undeclared-aliases: true
+    forbid-duplicated-anchors: true
+    forbid-unused-anchors: false

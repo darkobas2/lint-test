@@ -36,11 +36,11 @@ on:
       pre_commit_config_url:
         description: 'URL to shared pre-commit config (optional, uses local if not set)'
         type: string
-        default: 'https://github.com/darkobas2/lint-test/.pre-commit.yml'
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yml'
       yamllint_config_url:
         description: 'URL to shared yamllint config (optional)'
         type: string
-        default: 'https://github.com/darkobas2/lint-test/.yamllint.yml'
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint.yml'
     secrets:
       LINT_BOT_APP_ID:
         description: 'GitHub App ID for lint-bot'
@@ -59,9 +59,20 @@ jobs:
     outputs:
       fixed: ${{ steps.changes.outputs.has_changes }}
     steps:
+      - name: Check if GitHub App is configured
+        id: check-app
+        env:
+          APP_ID: ${{ secrets.LINT_BOT_APP_ID }}
+        run: |
+          if [[ -n "$APP_ID" ]]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Generate GitHub App Token
         id: app-token
-        if: inputs.auto_fix && secrets.LINT_BOT_APP_ID != ''
+        if: inputs.auto_fix && steps.check-app.outputs.available == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.LINT_BOT_APP_ID }}
@@ -122,7 +133,7 @@ jobs:
 
       # Auto-commit with GitHub App (maintains audit trail)
       - name: Commit and push fixes
-        if: steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && secrets.LINT_BOT_APP_ID != ''
+        if: steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -138,7 +149,7 @@ jobs:
 
       # If no GitHub App, comment with instructions
       - name: Comment fix instructions
-        if: steps.changes.outputs.has_changes == 'true' && (secrets.LINT_BOT_APP_ID == '' || !inputs.auto_fix)
+        if: steps.changes.outputs.has_changes == 'true' && (steps.check-app.outputs.available == 'false' || !inputs.auto_fix)
         uses: actions/github-script@v7
         with:
           script: |
@@ -180,7 +191,7 @@ jobs:
 
       # Fail if pre-commit failed and no auto-fix
       - name: Fail if issues remain
-        if: steps.pre-commit.outputs.pre_commit_failed == 'true' && (secrets.LINT_BOT_APP_ID == '' || !inputs.auto_fix)
+        if: steps.pre-commit.outputs.pre_commit_failed == 'true' && (steps.check-app.outputs.available == 'false' || !inputs.auto_fix)
         run: |
           echo "::error::Pre-commit found issues. See PR comment for fix instructions."
           exit 1
