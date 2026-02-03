@@ -1,0 +1,24 @@
+extends: default
+ignore: |
+  charts/*/templates/
+  .git/
+  node_modules/
+rules:
+  line-length:
+    max: 120
+    # Allows long URLs, paths, or shell commands to exceed the limit
+    allow-non-breakable-words: true
+    # Ensures that even if a line is long, it doesn't fail if it's a comment
+    allow-non-breakable-inline-mappings: true
+  indentation:
+    spaces: 2
+    indent-sequences: true
+  new-lines:
+    type: unix
+  trailing-spaces: enable
+  new-line-at-end-of-file: enable
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']
