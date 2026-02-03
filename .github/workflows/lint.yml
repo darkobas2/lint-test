@@ -1,0 +1,254 @@
+# organization-actions/.github/workflows/yaml-lint-security.yml
+#
+# Reusable workflow for YAML linting and security scanning
+# Uses a GitHub App for auto-commit to maintain audit trail
+#
+# Setup:
+#   1. Create GitHub App (see docs/LINT_BOT_SETUP.md)
+#   2. Add secrets to org: LINT_BOT_APP_ID, LINT_BOT_PRIVATE_KEY
+#   3. Call this workflow from your repos
+
+name: YAML Lint + Security
+
+on:
+  workflow_call:
+    inputs:
+      auto_fix:
+        description: 'Auto-commit lint fixes (requires GitHub App secrets)'
+        type: boolean
+        default: true
+      checkov_enabled:
+        description: 'Run Checkov security scanning'
+        type: boolean
+        default: true
+      checkov_soft_fail:
+        description: 'Allow Checkov failures without blocking'
+        type: boolean
+        default: true
+      checkov_skip_checks:
+        description: 'Comma-separated list of Checkov checks to skip'
+        type: string
+        default: 'CKV_K8S_43,CKV_K8S_40,CKV_K8S_13,CKV_K8S_12,CKV_K8S_11,CKV_K8S_10,CKV_GHA_7'
+      checkov_framework:
+        description: 'Checkov frameworks to run'
+        type: string
+        default: 'kubernetes,helm,secrets'
+      pre_commit_config_url:
+        description: 'URL to shared pre-commit config (optional, uses local if not set)'
+        type: string
+        default: 'https://github.com/darkobas2/lint-test/.pre-commit.yml'
+      yamllint_config_url:
+        description: 'URL to shared yamllint config (optional)'
+        type: string
+        default: 'https://github.com/darkobas2/lint-test/.yamllint.yml'
+    secrets:
+      LINT_BOT_APP_ID:
+        description: 'GitHub App ID for lint-bot'
+        required: false
+      LINT_BOT_PRIVATE_KEY:
+        description: 'GitHub App private key for lint-bot'
+        required: false
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      fixed: ${{ steps.changes.outputs.has_changes }}
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        if: inputs.auto_fix && secrets.LINT_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.LINT_BOT_APP_ID }}
+          private-key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
+
+      - name: Checkout (with App token for push)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-
+
+      # Fetch shared configs if URLs provided
+      - name: Fetch shared pre-commit config
+        if: inputs.pre_commit_config_url != ''
+        run: |
+          echo "Fetching pre-commit config from ${{ inputs.pre_commit_config_url }}"
+          curl -sSfL "${{ inputs.pre_commit_config_url }}" -o .pre-commit-config.yaml
+
+      - name: Fetch shared yamllint config
+        if: inputs.yamllint_config_url != ''
+        run: |
+          echo "Fetching yamllint config from ${{ inputs.yamllint_config_url }}"
+          curl -sSfL "${{ inputs.yamllint_config_url }}" -o .yamllint
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit
+        id: pre-commit
+        run: |
+          pre-commit run --all-files 2>&1 | tee pre-commit-output.txt || echo "pre_commit_failed=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Files modified by pre-commit:"
+            git status --porcelain
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Auto-commit with GitHub App (maintains audit trail)
+      - name: Commit and push fixes
+        if: steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && secrets.LINT_BOT_APP_ID != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config user.name "lint-bot[bot]"
+          git config user.email "${{ secrets.LINT_BOT_APP_ID }}+lint-bot[bot]@users.noreply.github.com"
+          
+          git add -A
+          git commit -m "style: auto-fix linting issues
+
+          Co-authored-by: ${{ github.event.pull_request.user.login }} <${{ github.event.pull_request.user.id }}+${{ github.event.pull_request.user.login }}@users.noreply.github.com>"
+          
+          git push
+
+      # If no GitHub App, comment with instructions
+      - name: Comment fix instructions
+        if: steps.changes.outputs.has_changes == 'true' && (secrets.LINT_BOT_APP_ID == '' || !inputs.auto_fix)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = '';
+            try {
+              output = fs.readFileSync('pre-commit-output.txt', 'utf8');
+              // Truncate if too long
+              if (output.length > 3000) {
+                output = output.substring(0, 3000) + '\n... (truncated)';
+              }
+            } catch (e) {
+              output = 'See workflow logs for details.';
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### 🔧 Linting fixes required
+
+            Pre-commit found issues and made fixes locally. Please run:
+
+            \`\`\`bash
+            pre-commit run --all-files
+            git add -A && git commit -m "style: fix linting issues"
+            git push
+            \`\`\`
+
+            <details>
+            <summary>Pre-commit output</summary>
+
+            \`\`\`
+            ${output}
+            \`\`\`
+            </details>
+            `
+            })
+
+      # Fail if pre-commit failed and no auto-fix
+      - name: Fail if issues remain
+        if: steps.pre-commit.outputs.pre_commit_failed == 'true' && (secrets.LINT_BOT_APP_ID == '' || !inputs.auto_fix)
+        run: |
+          echo "::error::Pre-commit found issues. See PR comment for fix instructions."
+          exit 1
+
+  security:
+    name: Security Scan
+    if: inputs.checkov_enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+            **.yaml
+            **.yml
+            charts/**
+
+      - name: Run Checkov
+        if: steps.changed-files.outputs.any_changed == 'true'
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          file: ${{ steps.changed-files.outputs.all_changed_files }}
+          framework: ${{ inputs.checkov_framework }}
+          soft_fail: ${{ inputs.checkov_soft_fail }}
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+          compact: true
+          quiet: true
+          skip_check: ${{ inputs.checkov_skip_checks }}
+
+      # Upload SARIF for GitHub Security tab
+      - name: Upload SARIF
+        if: always() && steps.changed-files.outputs.any_changed == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true
+
+      - name: Comment security findings
+        if: failure() && !inputs.checkov_soft_fail
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### 🔒 Security scan failed
+              
+            Checkov found security issues that must be fixed before merging.
+            
+            See the [Security tab](/${context.repo.owner}/${context.repo.repo}/security/code-scanning) for details.
+            
+            To run locally:
+            \`\`\`bash
+            pip install checkov
+            checkov -f <file> --framework ${{ inputs.checkov_framework }}
+            \`\`\`
+            `
+            })
