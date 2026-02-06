@@ -13,10 +13,23 @@ name: YAML Lint + Security
 on:
   workflow_call:
     inputs:
+      # === General Settings ===
       auto_fix:
         description: 'Auto-commit lint fixes (requires GitHub App secrets)'
         type: boolean
         default: true
+
+      # === Shared Config URLs ===
+      pre_commit_config_url:
+        description: 'URL to shared pre-commit config (optional, uses local if not set)'
+        type: string
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yml'
+      yamllint_config_url:
+        description: 'URL to shared yamllint config (optional)'
+        type: string
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint.yml'
+
+      # === Checkov Security Scanning ===
       checkov_enabled:
         description: 'Run Checkov security scanning'
         type: boolean
@@ -33,10 +46,8 @@ on:
         description: 'Checkov frameworks to run'
         type: string
         default: 'kubernetes,helm,secrets'
-      helm_lint_enabled:
-        description: 'Run Helm lint on charts'
-        type: boolean
-        default: true
+
+      # === Trivy Security Scanning ===
       trivy_enabled:
         description: 'Run Trivy security scanning'
         type: boolean
@@ -45,14 +56,12 @@ on:
         description: 'Comma-separated list of directories for Trivy to skip'
         type: string
         default: '.git,.github'
-      pre_commit_config_url:
-        description: 'URL to shared pre-commit config (optional, uses local if not set)'
-        type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yml'
-      yamllint_config_url:
-        description: 'URL to shared yamllint config (optional)'
-        type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint.yml'
+
+      # === Helm Linting ===
+      helm_lint_enabled:
+        description: 'Run Helm lint on charts'
+        type: boolean
+        default: true
     secrets:
       LINT_BOT_APP_ID:
         description: 'GitHub App ID for lint-bot'
