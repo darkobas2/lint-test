@@ -307,25 +307,67 @@ jobs:
           category: trivy
         continue-on-error: true
 
-      - name: Comment security findings
-        if: failure() && !inputs.checkov_soft_fail
+      - name: Comment security scan results
+        if: always() && (inputs.checkov_enabled || inputs.trivy_enabled) && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
+            const checkovEnabled = ${{ inputs.checkov_enabled }};
+            const trivyEnabled = ${{ inputs.trivy_enabled }};
+            const checkovResult = '${{ steps.checkov.outcome }}';
+            const softFail = ${{ inputs.checkov_soft_fail }};
+
+            let body = '## 🔒 Security Scan Results\n\n';
+            let hasFindings = false;
+
+            // Checkov results
+            if (checkovEnabled && checkovResult !== 'skipped') {
+              body += '### Checkov\n';
+              if (checkovResult === 'success') {
+                body += '✅ No issues found\n\n';
+              } else if (checkovResult === 'failure') {
+                body += softFail
+                  ? '⚠️ Issues found (soft-fail mode)\n\n'
+                  : '❌ Issues found - must be fixed\n\n';
+                hasFindings = true;
+              }
+            }
+
+            // Trivy results
+            if (trivyEnabled) {
+              body += '### Trivy\n';
+              body += '✅ Scan completed\n\n';
+            }
+
+            // Links to results
+            body += '---\n\n';
+            body += '📊 **View detailed results:**\n';
+            body += `- [Security Tab](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n`;
+            body += `- [Code Scanning Alerts](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning?query=is:open+branch:${context.payload.pull_request.head.ref})\n\n`;
+
+            // Local testing instructions
+            if (hasFindings) {
+              body += '<details><summary>🔧 Run scans locally</summary>\n\n';
+              if (checkovEnabled) {
+                body += '**Checkov:**\n```bash\npip install checkov\n';
+                body += 'checkov -d . --framework ${{ inputs.checkov_framework }}\n```\n\n';
+              }
+              if (trivyEnabled) {
+                body += '**Trivy:**\n```bash\n';
+                body += 'trivy fs --severity CRITICAL,HIGH,MEDIUM .\n```\n';
+              }
+              body += '</details>';
+            }
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### 🔒 Security scan failed
+              body: body
+            });
 
-            Checkov found security issues that must be fixed before merging.
-
-            See the [Security tab](/${context.repo.owner}/${context.repo.repo}/security/code-scanning) for details.
-
-            To run locally:
-            \`\`\`bash
-            pip install checkov
-            checkov -f <file> --framework ${{ inputs.checkov_framework }}
-            \`\`\`
-            `
-            })
+      - name: Fail if security issues found
+        if: steps.checkov.outcome == 'failure' && !inputs.checkov_soft_fail
+        run: |
+          echo "::error::Security scan failed - issues must be fixed before merging"
+          exit 1
