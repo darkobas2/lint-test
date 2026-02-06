@@ -33,6 +33,18 @@ on:
         description: 'Checkov frameworks to run'
         type: string
         default: 'kubernetes,helm,secrets'
+      helm_lint_enabled:
+        description: 'Run Helm lint on charts'
+        type: boolean
+        default: true
+      trivy_enabled:
+        description: 'Run Trivy security scanning'
+        type: boolean
+        default: true
+      trivy_skip_dirs:
+        description: 'Comma-separated list of directories for Trivy to skip'
+        type: string
+        default: '.git,.github'
       pre_commit_config_url:
         description: 'URL to shared pre-commit config (optional, uses local if not set)'
         type: string
@@ -154,9 +166,71 @@ jobs:
           echo "::error::Pre-commit found issues. See PR comment for fix instructions."
           exit 1
 
+  helm-lint:
+    name: Helm Lint
+    if: inputs.helm_lint_enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Find Helm charts
+        id: find-charts
+        run: |
+          charts=()
+
+          # Check if Chart.yaml exists in root
+          if [[ -f "Chart.yaml" ]]; then
+            echo "Found chart in root directory"
+            charts+=(".")
+          fi
+
+          # Find charts in subdirectories
+          while IFS= read -r chart; do
+            chart_dir=$(dirname "$chart")
+            echo "Found chart in $chart_dir"
+            charts+=("$chart_dir")
+          done < <(find . -mindepth 2 -name "Chart.yaml" -not -path "*/\.*")
+
+          if [[ ${#charts[@]} -eq 0 ]]; then
+            echo "No Helm charts found"
+            echo "charts_found=false" >> $GITHUB_OUTPUT
+          else
+            echo "charts_found=true" >> $GITHUB_OUTPUT
+            # Join array with newlines
+            printf "%s\n" "${charts[@]}" > charts.txt
+          fi
+
+      - name: Lint Helm charts
+        if: steps.find-charts.outputs.charts_found == 'true'
+        run: |
+          failed=0
+          while IFS= read -r chart; do
+            echo "::group::Linting $chart"
+            if helm lint "$chart"; then
+              echo "✓ $chart passed"
+            else
+              echo "✗ $chart failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done < charts.txt
+
+          if [[ $failed -eq 1 ]]; then
+            echo "::error::One or more Helm charts failed linting"
+            exit 1
+          fi
+
   security:
     name: Security Scan
-    if: inputs.checkov_enabled
+    if: inputs.checkov_enabled || inputs.trivy_enabled
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -176,9 +250,10 @@ jobs:
             **.yaml
             **.yml
             charts/**
+            Chart.yaml
 
       - name: Run Checkov
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: inputs.checkov_enabled && steps.changed-files.outputs.any_changed == 'true'
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -186,17 +261,41 @@ jobs:
           framework: ${{ inputs.checkov_framework }}
           soft_fail: ${{ inputs.checkov_soft_fail }}
           output_format: cli,sarif
-          output_file_path: console,results.sarif
+          output_file_path: console,checkov-results.sarif
           compact: true
           quiet: true
           skip_check: ${{ inputs.checkov_skip_checks }}
 
-      # Upload SARIF for GitHub Security tab
-      - name: Upload SARIF
-        if: always() && steps.changed-files.outputs.any_changed == 'true'
+      # Upload Checkov SARIF
+      - name: Upload Checkov SARIF
+        if: always() && inputs.checkov_enabled && steps.changed-files.outputs.any_changed == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: results.sarif
+          sarif_file: checkov-results.sarif
+          category: checkov
+        continue-on-error: true
+
+      # Run Trivy scan
+      - name: Run Trivy vulnerability scanner
+        if: inputs.trivy_enabled
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          skip-dirs: ${{ inputs.trivy_skip_dirs }}
+          scanners: 'vuln,secret,config'
+        continue-on-error: true
+
+      # Upload Trivy SARIF
+      - name: Upload Trivy SARIF
+        if: always() && inputs.trivy_enabled
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
         continue-on-error: true
 
       - name: Comment security findings
