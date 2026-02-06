@@ -52,6 +52,10 @@ on:
         description: 'Run Trivy security scanning'
         type: boolean
         default: true
+      trivy_soft_fail:
+        description: 'Allow Trivy failures without blocking'
+        type: boolean
+        default: true
       trivy_skip_dirs:
         description: 'Comma-separated list of directories for Trivy to skip'
         type: string
@@ -287,6 +291,7 @@ jobs:
       # Run Trivy scan
       - name: Run Trivy vulnerability scanner
         if: inputs.trivy_enabled
+        id: trivy
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -296,7 +301,6 @@ jobs:
           severity: 'CRITICAL,HIGH,MEDIUM'
           skip-dirs: ${{ inputs.trivy_skip_dirs }}
           scanners: 'vuln,secret,config'
-        continue-on-error: true
 
       # Upload Trivy SARIF
       - name: Upload Trivy SARIF
@@ -334,9 +338,18 @@ jobs:
             }
 
             // Trivy results
-            if (trivyEnabled) {
+            const trivyResult = '${{ steps.trivy.outcome }}';
+            const trivySoftFail = ${{ inputs.trivy_soft_fail }};
+            if (trivyEnabled && trivyResult !== 'skipped') {
               body += '### Trivy\n';
-              body += '✅ Scan completed\n\n';
+              if (trivyResult === 'success') {
+                body += '✅ No issues found\n\n';
+              } else if (trivyResult === 'failure') {
+                body += trivySoftFail
+                  ? '⚠️ Issues found (soft-fail mode)\n\n'
+                  : '❌ Issues found - must be fixed\n\n';
+                hasFindings = true;
+              }
             }
 
             // Links to results
@@ -367,7 +380,15 @@ jobs:
             });
 
       - name: Fail if security issues found
-        if: steps.checkov.outcome == 'failure' && !inputs.checkov_soft_fail
+        if: |
+          (steps.checkov.outcome == 'failure' && !inputs.checkov_soft_fail) ||
+          (steps.trivy.outcome == 'failure' && !inputs.trivy_soft_fail)
         run: |
           echo "::error::Security scan failed - issues must be fixed before merging"
+          if [[ "${{ steps.checkov.outcome }}" == "failure" && "${{ inputs.checkov_soft_fail }}" == "false" ]]; then
+            echo "  - Checkov found security issues"
+          fi
+          if [[ "${{ steps.trivy.outcome }}" == "failure" && "${{ inputs.trivy_soft_fail }}" == "false" ]]; then
+            echo "  - Trivy found vulnerabilities or misconfigurations"
+          fi
           exit 1
