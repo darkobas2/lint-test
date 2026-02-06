@@ -11,10 +11,6 @@
 name: YAML Lint + Security
 
 on:
-  push:
-    branches: ['main', 'master', 'develop']
-  pull_request:
-    branches: ['main', 'master', 'develop']
   workflow_call:
     inputs:
       auto_fix:
