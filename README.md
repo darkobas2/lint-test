@@ -54,18 +54,25 @@ Install pre-commit hooks for local development:
 # Install pre-commit (if not already installed)
 pip install pre-commit
 
-# Copy shared config to your repo
+# Fetch the shared pre-commit config (one-time setup)
 curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml
-curl -o .yamllint https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint
 
 # Install the git hooks
 pre-commit install
 
-# Run manually on all files
+# Run on all files
 pre-commit run --all-files
 
 # Or run on staged files only
 git add . && pre-commit run
+```
+
+**✨ Auto-sync built-in:** The pre-commit config includes a hook that automatically fetches the latest `.yamllint` config from the central repo before every run. You're always using fresh organization standards!
+
+**📝 Note:** Add these to your `.gitignore`:
+```gitignore
+# Auto-synced configs - always fetch fresh
+.yamllint
 ```
 
 ## Configuration
@@ -198,14 +205,17 @@ Rules:
 
 ### Pre-commit fails locally but passes in CI
 
-**Cause**: Different config versions or missing tools.
+**Cause**: Outdated `.pre-commit-config.yaml` or missing tools.
 
-**Fix**: Re-download shared configs:
+**Fix**: Re-fetch the pre-commit config and reinstall:
 ```bash
 curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml
 pre-commit clean
 pre-commit install
+pre-commit run --all-files
 ```
+
+**Note:** The `.yamllint` config auto-syncs on every run via the built-in hook.
 
 ## Examples
 

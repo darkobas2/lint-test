@@ -10,6 +10,19 @@
 
 repos:
   # ============================================================
+  # Sync shared configs (always runs first)
+  # ============================================================
+  - repo: local
+    hooks:
+      - id: sync-shared-configs
+        name: Sync shared lint configs
+        entry: bash -c 'curl -sSfL https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint -o .yamllint 2>/dev/null || true'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-commit, manual]
+
+  # ============================================================
   # Basic file hygiene
   # ============================================================
   - repo: https://github.com/pre-commit/pre-commit-hooks
