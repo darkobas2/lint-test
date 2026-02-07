@@ -41,7 +41,7 @@ on:
       checkov_skip_checks:
         description: 'Comma-separated list of Checkov checks to skip'
         type: string
-        default: 'CKV_K8S_43,CKV_K8S_40,CKV_K8S_13,CKV_K8S_12,CKV_K8S_11,CKV_K8S_10,CKV_GHA_7'
+        default: ''
       checkov_framework:
         description: 'Checkov frameworks to run'
         type: string
@@ -299,13 +299,13 @@ jobs:
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
-          file: ${{ steps.changed-files.outputs.all_changed_files }}
+          directory: .
           framework: ${{ inputs.checkov_framework }}
           soft_fail: ${{ inputs.checkov_soft_fail }}
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
           compact: true
-          quiet: true
+          quiet: false
           skip_check: ${{ inputs.checkov_skip_checks }}
 
       # Upload Checkov SARIF
