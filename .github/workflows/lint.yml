@@ -287,7 +287,7 @@ jobs:
             Chart.yaml
 
       - name: Run Checkov
-        if: inputs.checkov_enabled && steps.changed-files.outputs.any_changed == 'true'
+        if: inputs.checkov_enabled
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -302,7 +302,7 @@ jobs:
 
       # Upload Checkov SARIF
       - name: Upload Checkov SARIF
-        if: always() && inputs.checkov_enabled && steps.changed-files.outputs.any_changed == 'true'
+        if: always() && inputs.checkov_enabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov-results.sarif
