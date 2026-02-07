@@ -302,7 +302,7 @@ jobs:
           skip-dirs: ${{ inputs.trivy_skip_dirs }}
           scanners: 'vuln,secret,config'
           exit-code: '1'
-        continue-on-error: ${{ inputs.trivy_soft_fail }}
+        continue-on-error: ${{ inputs.trivy_soft_fail == true }}
 
       # Upload Trivy SARIF
       - name: Upload Trivy SARIF
