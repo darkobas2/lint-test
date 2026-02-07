@@ -63,6 +63,10 @@ on:
         description: 'Checkov frameworks to run'
         type: string
         default: 'kubernetes,helm,secrets'
+      checkov_upload_sarif:
+        description: 'Upload Checkov SARIF to GitHub Code Scanning'
+        type: boolean
+        default: true
 
       # === Trivy Security Scanning ===
       trivy_enabled:
@@ -77,6 +81,10 @@ on:
         description: 'Comma-separated list of directories for Trivy to skip'
         type: string
         default: '.git,.github'
+      trivy_upload_sarif:
+        description: 'Upload Trivy SARIF to GitHub Code Scanning'
+        type: boolean
+        default: true
 
       # === Helm Linting ===
       helm_lint_enabled:
@@ -312,11 +320,11 @@ jobs:
             Chart.yaml
 
       - name: Run Checkov
-        if: inputs.checkov_enabled
+        if: inputs.checkov_enabled && steps.changed-files.outputs.any_changed == 'true'
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
-          directory: .
+          file: ${{ steps.changed-files.outputs.all_changed_files }}
           framework: ${{ inputs.checkov_framework }}
           soft_fail: ${{ env.CHECKOV_SOFT_FAIL == 'true' }}
           output_format: cli,sarif
@@ -325,18 +333,32 @@ jobs:
           quiet: false
           skip_check: ${{ inputs.checkov_skip_checks }}
 
+      # Debug Checkov SARIF
+      - name: Debug Checkov SARIF
+        if: always() && inputs.checkov_enabled && steps.checkov.outcome != 'skipped'
+        run: |
+          echo "Checkov outcome: ${{ steps.checkov.outcome }}"
+          if [[ -f "checkov-results.sarif" ]]; then
+            echo "✓ checkov-results.sarif exists"
+            echo "File size: $(stat -f%z checkov-results.sarif 2>/dev/null || stat -c%s checkov-results.sarif) bytes"
+            echo "First 100 lines:"
+            head -100 checkov-results.sarif || true
+          else
+            echo "✗ checkov-results.sarif NOT found"
+          fi
+
       # Upload Checkov SARIF
       - name: Upload Checkov SARIF
-        if: always() && inputs.checkov_enabled
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && inputs.checkov_enabled && inputs.checkov_upload_sarif && steps.checkov.outcome != 'skipped' && hashFiles('checkov-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov-results.sarif
           category: Checkov
-        continue-on-error: true
+        continue-on-error: false
 
       # Run Trivy scan (always succeeds to ensure SARIF upload for code scanning)
       - name: Run Trivy vulnerability scanner
-        if: inputs.trivy_enabled
+        if: inputs.trivy_enabled && steps.changed-files.outputs.any_changed == 'true'
         id: trivy
         uses: aquasecurity/trivy-action@master
         with:
@@ -350,14 +372,26 @@ jobs:
           exit-code: '0'
         continue-on-error: false
 
+      # Debug Trivy SARIF
+      - name: Debug Trivy SARIF
+        if: always() && inputs.trivy_enabled && steps.trivy.outcome != 'skipped'
+        run: |
+          echo "Trivy outcome: ${{ steps.trivy.outcome }}"
+          if [[ -f "trivy-results.sarif" ]]; then
+            echo "✓ trivy-results.sarif exists"
+            echo "File size: $(stat -f%z trivy-results.sarif 2>/dev/null || stat -c%s trivy-results.sarif) bytes"
+          else
+            echo "✗ trivy-results.sarif NOT found"
+          fi
+
       # Upload Trivy SARIF
       - name: Upload Trivy SARIF
-        if: always() && inputs.trivy_enabled
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && inputs.trivy_enabled && inputs.trivy_upload_sarif && steps.trivy.outcome != 'skipped' && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
           category: Trivy
-        continue-on-error: true
+        continue-on-error: false
 
       # Check Trivy results and set output
       - name: Check Trivy SARIF for issues
