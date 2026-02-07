@@ -301,6 +301,8 @@ jobs:
           severity: 'CRITICAL,HIGH,MEDIUM'
           skip-dirs: ${{ inputs.trivy_skip_dirs }}
           scanners: 'vuln,secret,config'
+          exit-code: '1'
+        continue-on-error: ${{ inputs.trivy_soft_fail }}
 
       # Upload Trivy SARIF
       - name: Upload Trivy SARIF
@@ -356,7 +358,11 @@ jobs:
             body += '---\n\n';
             body += '📊 **View detailed results:**\n';
             body += `- [Security Tab](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n`;
-            body += `- [Code Scanning Alerts](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning?query=is:open+branch:${context.payload.pull_request.head.ref})\n\n`;
+            if (context.payload.pull_request) {
+              body += `- [Issues in this PR](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning?query=is:open+pr:${context.payload.pull_request.number})\n\n`;
+            } else {
+              body += `- [Code Scanning Alerts](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n\n`;
+            }
 
             // Local testing instructions
             if (hasFindings) {
