@@ -1,7 +1,12 @@
 # shared-configs/.yamllint
 #
+# Organization-wide yamllint configuration
+# Hosted at: github.com/cybergrid-development/shared-configs
+#
 # Usage in repos:
-#     yamllint_config_url: 'https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint'
+#   Option A: Copy this file to your repo as .yamllint
+#   Option B: Reference via workflow input:
+#     yamllint_config_url: 'https://raw.githubusercontent.com/cybergrid-development/shared-configs/main/.yamllint'
 
 extends: default
 
@@ -9,6 +14,7 @@ extends: default
 ignore:
   # Helm templates use Go templating - not valid YAML
   - charts/*/templates/
+  - templates/
   - '**/templates/*.yaml'
   - '**/templates/*.yml'
   # Vendor directories

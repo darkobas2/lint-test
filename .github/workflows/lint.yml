@@ -23,19 +23,15 @@ on:
       pre_commit_config_url:
         description: 'URL to shared pre-commit config (optional, uses local if not set)'
         type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yml'
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yaml'
       yamllint_config_url:
         description: 'URL to shared yamllint config (optional)'
         type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint.yml'
+        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint'
 
       # === Checkov Security Scanning ===
       checkov_enabled:
         description: 'Run Checkov security scanning'
-        type: boolean
-        default: true
-      checkov_soft_fail:
-        description: 'Allow Checkov failures without blocking'
         type: boolean
         default: true
       checkov_skip_checks:
@@ -50,10 +46,6 @@ on:
       # === Trivy Security Scanning ===
       trivy_enabled:
         description: 'Run Trivy security scanning'
-        type: boolean
-        default: true
-      trivy_soft_fail:
-        description: 'Allow Trivy failures without blocking'
         type: boolean
         default: true
       trivy_skip_dirs:
@@ -301,7 +293,7 @@ jobs:
         with:
           directory: .
           framework: ${{ inputs.checkov_framework }}
-          soft_fail: ${{ inputs.checkov_soft_fail }}
+          soft_fail: false
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
           compact: true
@@ -368,7 +360,6 @@ jobs:
             const checkovEnabled = ${{ inputs.checkov_enabled }};
             const trivyEnabled = ${{ inputs.trivy_enabled }};
             const checkovResult = '${{ steps.checkov.outcome }}';
-            const softFail = ${{ inputs.checkov_soft_fail }};
 
             let body = '## 🔒 Security Scan Results\n\n';
             let hasFindings = false;
@@ -379,24 +370,19 @@ jobs:
               if (checkovResult === 'success') {
                 body += '✅ No issues found\n\n';
               } else if (checkovResult === 'failure') {
-                body += softFail
-                  ? '⚠️ Issues found (soft-fail mode)\n\n'
-                  : '❌ Issues found - must be fixed\n\n';
+                body += '❌ Issues found - must be fixed\n\n';
                 hasFindings = true;
               }
             }
 
             // Trivy results
             const trivyHasIssues = '${{ steps.trivy-check.outputs.has_issues }}';
-            const trivySoftFail = ${{ inputs.trivy_soft_fail }};
             if (trivyEnabled && trivyHasIssues !== '') {
               body += '### Trivy\n';
               if (trivyHasIssues === 'false') {
                 body += '✅ No issues found\n\n';
               } else if (trivyHasIssues === 'true') {
-                body += trivySoftFail
-                  ? '⚠️ Issues found (soft-fail mode)\n\n'
-                  : '❌ Issues found - must be fixed\n\n';
+                body += '❌ Issues found - must be fixed\n\n';
                 hasFindings = true;
               }
             }
@@ -434,14 +420,14 @@ jobs:
 
       - name: Fail if security issues found
         if: |
-          (steps.checkov.outcome == 'failure' && !inputs.checkov_soft_fail) ||
-          (steps.trivy-check.outputs.has_issues == 'true' && !inputs.trivy_soft_fail)
+          steps.checkov.outcome == 'failure' ||
+          steps.trivy-check.outputs.has_issues == 'true'
         run: |
           echo "::error::Security scan failed - issues must be fixed before merging"
-          if [[ "${{ steps.checkov.outcome }}" == "failure" && "${{ inputs.checkov_soft_fail }}" == "false" ]]; then
+          if [[ "${{ steps.checkov.outcome }}" == "failure" ]]; then
             echo "  - Checkov found security issues"
           fi
-          if [[ "${{ steps.trivy-check.outputs.has_issues }}" == "true" && "${{ inputs.trivy_soft_fail }}" == "false" ]]; then
+          if [[ "${{ steps.trivy-check.outputs.has_issues }}" == "true" ]]; then
             echo "  - Trivy found vulnerabilities or misconfigurations"
           fi
           exit 1
