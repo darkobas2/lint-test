@@ -84,7 +84,30 @@ jobs:
     outputs:
       fixed: ${{ steps.changes.outputs.has_changes }}
     steps:
+      - name: Initial checkout to check commit author
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Check if commit is from lint-bot
+        id: check-bot
+        run: |
+          AUTHOR=$(git log -1 --format='%an')
+          MESSAGE=$(git log -1 --format='%s')
+          echo "Last commit author: $AUTHOR"
+          echo "Last commit message: $MESSAGE"
+
+          if [[ "$AUTHOR" == "lint-bot[bot]" ]] || [[ "$MESSAGE" == "style: auto-fix linting issues" ]]; then
+            echo "is_bot=true" >> $GITHUB_OUTPUT
+            echo "✓ Skipping lint - commit is from lint-bot"
+          else
+            echo "is_bot=false" >> $GITHUB_OUTPUT
+            echo "→ Running lint - commit is from user"
+          fi
+
       - name: Check if GitHub App is configured
+        if: steps.check-bot.outputs.is_bot != 'true'
         id: check-app
         env:
           APP_ID: ${{ secrets.LINT_BOT_APP_ID }}
@@ -97,13 +120,14 @@ jobs:
 
       - name: Generate GitHub App Token
         id: app-token
-        if: inputs.auto_fix && steps.check-app.outputs.available == 'true'
+        if: steps.check-bot.outputs.is_bot != 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.LINT_BOT_APP_ID }}
           private-key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
 
       - name: Checkout (with App token for push)
+        if: steps.check-bot.outputs.is_bot != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -111,11 +135,13 @@ jobs:
           token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Setup Python
+        if: steps.check-bot.outputs.is_bot != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Cache pre-commit
+        if: steps.check-bot.outputs.is_bot != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
@@ -125,27 +151,30 @@ jobs:
 
       # Fetch shared configs if URLs provided
       - name: Fetch shared pre-commit config
-        if: inputs.pre_commit_config_url != ''
+        if: steps.check-bot.outputs.is_bot != 'true' && inputs.pre_commit_config_url != ''
         run: |
           echo "Fetching pre-commit config from ${{ inputs.pre_commit_config_url }}"
           curl -sSfL "${{ inputs.pre_commit_config_url }}" -o .pre-commit-config.yaml
 
       - name: Fetch shared yamllint config
-        if: inputs.yamllint_config_url != ''
+        if: steps.check-bot.outputs.is_bot != 'true' && inputs.yamllint_config_url != ''
         run: |
           echo "Fetching yamllint config from ${{ inputs.yamllint_config_url }}"
           curl -sSfL "${{ inputs.yamllint_config_url }}" -o .yamllint
 
       - name: Install pre-commit
+        if: steps.check-bot.outputs.is_bot != 'true'
         run: pip install pre-commit
 
       - name: Run pre-commit
+        if: steps.check-bot.outputs.is_bot != 'true'
         id: pre-commit
         run: |
           pre-commit run --all-files 2>&1 | tee pre-commit-output.txt || echo "pre_commit_failed=true" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Check for changes
+        if: steps.check-bot.outputs.is_bot != 'true'
         id: changes
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
@@ -158,7 +187,7 @@ jobs:
 
       # Auto-commit with GitHub App (maintains audit trail)
       - name: Commit and push fixes
-        if: steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
+        if: steps.check-bot.outputs.is_bot != 'true' && steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -166,7 +195,7 @@ jobs:
           git config user.email "${{ secrets.LINT_BOT_APP_ID }}+lint-bot[bot]@users.noreply.github.com"
 
           git add -A
-          git commit -m "style: auto-fix linting issues [skip ci]
+          git commit -m "style: auto-fix linting issues
 
           Co-authored-by: ${{ github.event.pull_request.user.login }} <${{ github.event.pull_request.user.id }}+${{ github.event.pull_request.user.login }}@users.noreply.github.com>"
 
@@ -174,7 +203,7 @@ jobs:
 
       # Fail if pre-commit failed and no auto-fix
       - name: Fail if issues remain
-        if: steps.pre-commit.outputs.pre_commit_failed == 'true' && (steps.check-app.outputs.available == 'false' || !inputs.auto_fix)
+        if: steps.check-bot.outputs.is_bot != 'true' && steps.pre-commit.outputs.pre_commit_failed == 'true' && (steps.check-app.outputs.available == 'false' || !inputs.auto_fix)
         run: |
           echo "::error::Pre-commit found issues. See PR comment for fix instructions."
           exit 1
