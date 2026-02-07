@@ -285,10 +285,10 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov-results.sarif
-          category: checkov
+          category: Checkov
         continue-on-error: true
 
-      # Run Trivy scan
+      # Run Trivy scan (always succeeds to ensure SARIF upload for code scanning)
       - name: Run Trivy vulnerability scanner
         if: inputs.trivy_enabled
         id: trivy
@@ -301,8 +301,8 @@ jobs:
           severity: 'CRITICAL,HIGH,MEDIUM'
           skip-dirs: ${{ inputs.trivy_skip_dirs }}
           scanners: 'vuln,secret,config'
-          exit-code: '1'
-        continue-on-error: ${{ inputs.trivy_soft_fail == true }}
+          exit-code: '0'
+        continue-on-error: false
 
       # Upload Trivy SARIF
       - name: Upload Trivy SARIF
@@ -310,8 +310,26 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
-          category: trivy
+          category: Trivy
         continue-on-error: true
+
+      # Check Trivy results and set output
+      - name: Check Trivy SARIF for issues
+        if: inputs.trivy_enabled
+        id: trivy-check
+        run: |
+          if [[ -f "trivy-results.sarif" ]]; then
+            # Count results in SARIF (jq would be cleaner but may not be available)
+            if grep -q '"results":\s*\[\s*{' trivy-results.sarif; then
+              echo "has_issues=true" >> $GITHUB_OUTPUT
+              echo "Trivy found security issues"
+            else
+              echo "has_issues=false" >> $GITHUB_OUTPUT
+              echo "Trivy found no issues"
+            fi
+          else
+            echo "has_issues=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Comment security scan results
         if: always() && (inputs.checkov_enabled || inputs.trivy_enabled) && github.event_name == 'pull_request'
@@ -340,13 +358,13 @@ jobs:
             }
 
             // Trivy results
-            const trivyResult = '${{ steps.trivy.outcome }}';
+            const trivyHasIssues = '${{ steps.trivy-check.outputs.has_issues }}';
             const trivySoftFail = ${{ inputs.trivy_soft_fail }};
-            if (trivyEnabled && trivyResult !== 'skipped') {
+            if (trivyEnabled && trivyHasIssues !== '') {
               body += '### Trivy\n';
-              if (trivyResult === 'success') {
+              if (trivyHasIssues === 'false') {
                 body += '✅ No issues found\n\n';
-              } else if (trivyResult === 'failure') {
+              } else if (trivyHasIssues === 'true') {
                 body += trivySoftFail
                   ? '⚠️ Issues found (soft-fail mode)\n\n'
                   : '❌ Issues found - must be fixed\n\n';
@@ -357,9 +375,9 @@ jobs:
             // Links to results
             body += '---\n\n';
             body += '📊 **View detailed results:**\n';
-            body += `- [Security Tab](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n`;
             if (context.payload.pull_request) {
-              body += `- [Issues in this PR](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning?query=is:open+pr:${context.payload.pull_request.number})\n\n`;
+              body += `- [Issues in this PR](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning?query=is:open+pr:${context.payload.pull_request.number})\n`;
+              body += `- [All Code Scanning Alerts](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n\n`;
             } else {
               body += `- [Code Scanning Alerts](https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning)\n\n`;
             }
@@ -388,13 +406,13 @@ jobs:
       - name: Fail if security issues found
         if: |
           (steps.checkov.outcome == 'failure' && !inputs.checkov_soft_fail) ||
-          (steps.trivy.outcome == 'failure' && !inputs.trivy_soft_fail)
+          (steps.trivy-check.outputs.has_issues == 'true' && !inputs.trivy_soft_fail)
         run: |
           echo "::error::Security scan failed - issues must be fixed before merging"
           if [[ "${{ steps.checkov.outcome }}" == "failure" && "${{ inputs.checkov_soft_fail }}" == "false" ]]; then
             echo "  - Checkov found security issues"
           fi
-          if [[ "${{ steps.trivy.outcome }}" == "failure" && "${{ inputs.trivy_soft_fail }}" == "false" ]]; then
+          if [[ "${{ steps.trivy-check.outputs.has_issues }}" == "true" && "${{ inputs.trivy_soft_fail }}" == "false" ]]; then
             echo "  - Trivy found vulnerabilities or misconfigurations"
           fi
           exit 1
