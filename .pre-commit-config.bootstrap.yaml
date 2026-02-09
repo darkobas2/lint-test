@@ -1,0 +1,27 @@
+# .pre-commit-config.yaml (Bootstrap Template)
+#
+# Copy this file to new repositories as `.pre-commit-config.yaml`
+# It will automatically fetch and use the shared config from:
+# https://github.com/darkobas2/lint-test/blob/main/.pre-commit-config.yaml
+#
+# Usage:
+#   1. Copy this file to your repo as `.pre-commit-config.yaml`
+#   2. Run: pre-commit install
+#   3. Run: pre-commit run --all-files
+#   4. This will fetch the shared config and overwrite this file
+#   5. Run pre-commit again - now it uses the full shared config!
+#
+
+repos:
+  # ============================================================
+  # Sync shared configs (always runs first)
+  # ============================================================
+  - repo: local
+    hooks:
+      - id: sync-shared-configs
+        name: Sync shared lint configs
+        entry: bash -c 'curl -sSfL https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint -o .yamllint 2>/dev/null || true; curl -sSfL https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml -o .pre-commit-config.yaml 2>/dev/null || true'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-commit, manual]

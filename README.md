@@ -48,32 +48,38 @@ jobs:
 
 ### Option 2: Local Pre-commit Setup
 
-Install pre-commit hooks for local development:
+Install pre-commit hooks for local development with **centralized config**:
 
 ```bash
 # Install pre-commit (if not already installed)
 pip install pre-commit
 
-# Fetch the shared pre-commit config (one-time setup)
-curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml
+# Use the bootstrap config to auto-sync the shared config
+curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.bootstrap.yaml
 
 # Install the git hooks
 pre-commit install
 
-# Run on all files
+# First run syncs the full shared config
 pre-commit run --all-files
 
-# Or run on staged files only
-git add . && pre-commit run
+# Subsequent runs use the full shared config
+pre-commit run --all-files
 ```
 
-**✨ Auto-sync built-in:** The pre-commit config includes a hook that automatically fetches the latest `.yamllint` config from the central repo before every run. You're always using fresh organization standards!
+**✨ Auto-sync built-in:** The shared pre-commit config includes hooks that automatically fetch:
+- Latest `.pre-commit-config.yaml` (syncs itself!)
+- Latest `.yamllint` config
+This ensures you're always using the organization's latest standards!
 
-**📝 Note:** Add these to your `.gitignore`:
+**📝 Note:** You can optionally add these to your `.gitignore` (they auto-sync on every run):
 ```gitignore
 # Auto-synced configs - always fetch fresh
 .yamllint
+.pre-commit-config.yaml
 ```
+
+Or commit them to your repo for offline use - they'll still auto-update when you run pre-commit.
 
 ## Configuration
 
