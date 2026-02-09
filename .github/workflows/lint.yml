@@ -219,12 +219,21 @@ jobs:
           git config user.name "lint-bot[bot]"
           git config user.email "${{ secrets.LINT_BOT_APP_ID }}+lint-bot[bot]@users.noreply.github.com"
 
+          # Exclude workflow files (requires workflows permission to modify)
           git add -A
-          git commit -m "style: auto-fix linting issues
+          git reset -- .github/workflows/
+
+          # Only commit if there are still changes after excluding workflows
+          if [[ -n "$(git diff --cached --name-only)" ]]; then
+            git commit -m "style: auto-fix linting issues
 
           Co-authored-by: ${{ github.event.pull_request.user.login }} <${{ github.event.pull_request.user.id }}+${{ github.event.pull_request.user.login }}@users.noreply.github.com>"
 
-          git push
+            git push
+          else
+            echo "Only workflow files changed - skipping auto-commit (requires workflows permission)"
+            exit 1
+          fi
 
       # Fail if pre-commit failed and no auto-fix
       - name: Fail if issues remain
