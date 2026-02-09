@@ -372,12 +372,21 @@ jobs:
         id: checkov-check
         run: |
           if [[ -f "checkov-results.sarif" ]]; then
-            # Count results in SARIF
-            if grep -q '"results":\s*\[\s*{' checkov-results.sarif; then
-              echo "has_issues=true" >> $GITHUB_OUTPUT
+            # Use Python to properly parse SARIF JSON
+            HAS_ISSUES=$(python3 -c "
+          import json, sys
+          with open('checkov-results.sarif') as f:
+              sarif = json.load(f)
+              for run in sarif.get('runs', []):
+                  if len(run.get('results', [])) > 0:
+                      print('true')
+                      sys.exit(0)
+              print('false')
+          ")
+            echo "has_issues=$HAS_ISSUES" >> $GITHUB_OUTPUT
+            if [[ "$HAS_ISSUES" == "true" ]]; then
               echo "Checkov found security issues"
             else
-              echo "has_issues=false" >> $GITHUB_OUTPUT
               echo "Checkov found no issues"
             fi
           else
@@ -427,12 +436,21 @@ jobs:
         id: trivy-check
         run: |
           if [[ -f "trivy-results.sarif" ]]; then
-            # Count results in SARIF (jq would be cleaner but may not be available)
-            if grep -q '"results":\s*\[\s*{' trivy-results.sarif; then
-              echo "has_issues=true" >> $GITHUB_OUTPUT
+            # Use Python to properly parse SARIF JSON
+            HAS_ISSUES=$(python3 -c "
+          import json, sys
+          with open('trivy-results.sarif') as f:
+              sarif = json.load(f)
+              for run in sarif.get('runs', []):
+                  if len(run.get('results', [])) > 0:
+                      print('true')
+                      sys.exit(0)
+              print('false')
+          ")
+            echo "has_issues=$HAS_ISSUES" >> $GITHUB_OUTPUT
+            if [[ "$HAS_ISSUES" == "true" ]]; then
               echo "Trivy found security issues"
             else
-              echo "has_issues=false" >> $GITHUB_OUTPUT
               echo "Trivy found no issues"
             fi
           else
