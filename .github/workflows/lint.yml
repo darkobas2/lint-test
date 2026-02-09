@@ -326,12 +326,13 @@ jobs:
         with:
           directory: .
           framework: ${{ inputs.checkov_framework }}
-          soft_fail: ${{ env.CHECKOV_SOFT_FAIL == 'true' }}
+          soft_fail: true
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
           compact: true
           quiet: false
           skip_check: ${{ inputs.checkov_skip_checks }}
+        continue-on-error: true
 
       # Debug Checkov SARIF
       - name: Debug Checkov SARIF
@@ -355,6 +356,24 @@ jobs:
           sarif_file: checkov-results.sarif
           category: Checkov
         continue-on-error: false
+
+      # Check Checkov results and set output
+      - name: Check Checkov SARIF for issues
+        if: inputs.checkov_enabled
+        id: checkov-check
+        run: |
+          if [[ -f "checkov-results.sarif" ]]; then
+            # Count results in SARIF
+            if grep -q '"results":\s*\[\s*{' checkov-results.sarif; then
+              echo "has_issues=true" >> $GITHUB_OUTPUT
+              echo "Checkov found security issues"
+            else
+              echo "has_issues=false" >> $GITHUB_OUTPUT
+              echo "Checkov found no issues"
+            fi
+          else
+            echo "has_issues=false" >> $GITHUB_OUTPUT
+          fi
 
       # Run Trivy scan (always succeeds to ensure SARIF upload for code scanning)
       - name: Run Trivy vulnerability scanner
@@ -418,7 +437,7 @@ jobs:
           script: |
             const checkovEnabled = ${{ inputs.checkov_enabled }};
             const trivyEnabled = ${{ inputs.trivy_enabled }};
-            const checkovResult = '${{ steps.checkov.outcome }}';
+            const checkovHasIssues = '${{ steps.checkov-check.outputs.has_issues }}';
             const checkovSoftFail = '${{ env.CHECKOV_SOFT_FAIL }}' === 'true';
             const trivySoftFail = '${{ env.TRIVY_SOFT_FAIL }}' === 'true';
 
@@ -426,11 +445,11 @@ jobs:
             let hasFindings = false;
 
             // Checkov results
-            if (checkovEnabled && checkovResult !== 'skipped') {
+            if (checkovEnabled && checkovHasIssues !== '') {
               body += '### Checkov\n';
-              if (checkovResult === 'success') {
+              if (checkovHasIssues === 'false') {
                 body += '✅ No issues found\n\n';
-              } else if (checkovResult === 'failure') {
+              } else if (checkovHasIssues === 'true') {
                 body += checkovSoftFail
                   ? '⚠️ Issues found (soft-fail mode)\n\n'
                   : '❌ Issues found - must be fixed\n\n';
@@ -485,11 +504,11 @@ jobs:
 
       - name: Fail if security issues found
         if: |
-          (steps.checkov.outcome == 'failure' && env.CHECKOV_SOFT_FAIL == 'false') ||
+          (steps.checkov-check.outputs.has_issues == 'true' && env.CHECKOV_SOFT_FAIL == 'false') ||
           (steps.trivy-check.outputs.has_issues == 'true' && env.TRIVY_SOFT_FAIL == 'false')
         run: |
           echo "::error::Security scan failed - issues must be fixed before merging"
-          if [[ "${{ steps.checkov.outcome }}" == "failure" && "${{ env.CHECKOV_SOFT_FAIL }}" == "false" ]]; then
+          if [[ "${{ steps.checkov-check.outputs.has_issues }}" == "true" && "${{ env.CHECKOV_SOFT_FAIL }}" == "false" ]]; then
             echo "  - Checkov found security issues"
           fi
           if [[ "${{ steps.trivy-check.outputs.has_issues }}" == "true" && "${{ env.TRIVY_SOFT_FAIL }}" == "false" ]]; then
