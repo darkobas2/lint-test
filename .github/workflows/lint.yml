@@ -324,7 +324,7 @@ jobs:
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
-          file: ${{ steps.changed-files.outputs.all_changed_files }}
+          directory: .
           framework: ${{ inputs.checkov_framework }}
           soft_fail: ${{ env.CHECKOV_SOFT_FAIL == 'true' }}
           output_format: cli,sarif
