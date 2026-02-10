@@ -1,20 +1,20 @@
 # Lint & Security Workflow
 
-Reusable GitHub Actions workflow for YAML linting and security scanning with shared configuration files.
+Reusable GitHub Actions workflow for YAML linting and security scanning.
 
 ## Features
 
-- **YAML Linting**: Pre-commit hooks + yamllint validation
-- **Auto-fix**: Automatically commits lint fixes via GitHub App
-- **Security Scanning**: Checkov + Trivy with SARIF uploads
-- **Helm Support**: Lint Helm charts with proper template exclusions
-- **Shared Configs**: Organization-wide linting standards
+- YAML linting with pre-commit hooks and yamllint
+- Automatic lint fixes via GitHub App
+- Security scanning with Checkov and Trivy
+- Helm chart linting
+- Profile-based configuration system
 
-## Quick Start
+## Usage
 
-### Option 1: Use as Reusable Workflow (Recommended)
+### Option 1: Reusable Workflow
 
-In your repository, create `.github/workflows/lint.yml`:
+Create `.github/workflows/lint.yml` in your repository:
 
 ```yaml
 name: Lint & Security
@@ -24,7 +24,6 @@ on:
     paths:
       - '**.yaml'
       - '**.yml'
-      - 'charts/**'
 
 jobs:
   lint-and-security:
@@ -34,11 +33,6 @@ jobs:
       pull-requests: write
       security-events: write
     with:
-      # Use shared configs from this repo
-      pre_commit_config_url: 'https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml'
-      yamllint_config_url: 'https://raw.githubusercontent.com/darkobas2/lint-test/main/.yamllint'
-
-      # Optional: Skip specific checks
       checkov_skip_checks: 'CKV_K8S_43,CKV_K8S_40'
       trivy_skip_dirs: '.git,.github,vendor'
     secrets:
@@ -46,40 +40,53 @@ jobs:
       LINT_BOT_PRIVATE_KEY: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
 ```
 
-### Option 2: Local Pre-commit Setup
+### Option 2: Local Pre-commit
 
-Install pre-commit hooks for local development with **centralized config**:
+Install pre-commit hooks locally:
 
 ```bash
-# Install pre-commit (if not already installed)
+# Install pre-commit
 pip install pre-commit
 
-# Use the bootstrap config to auto-sync the shared config
-curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.bootstrap.yaml
+# Bootstrap configuration (auto-detects profiles from repo name)
+curl -sSf https://raw.githubusercontent.com/darkobas2/lint-test/main/install.sh | bash
 
-# Install the git hooks
+# Install git hooks
 pre-commit install
 
-# First run syncs the full shared config
-pre-commit run --all-files
-
-# Subsequent runs use the full shared config
+# Run checks
 pre-commit run --all-files
 ```
 
-**✨ Auto-sync built-in:** The shared pre-commit config includes hooks that automatically fetch:
-- Latest `.pre-commit-config.yaml` (syncs itself!)
-- Latest `.yamllint` config
-This ensures you're always using the organization's latest standards!
+Alternative: Use the bootstrap config to auto-sync on every pre-commit run:
 
-**📝 Note:** You can optionally add these to your `.gitignore` (they auto-sync on every run):
-```gitignore
-# Auto-synced configs - always fetch fresh
-.yamllint
-.pre-commit-config.yaml
+```bash
+curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.bootstrap.yaml
+pre-commit install
 ```
 
-Or commit them to your repo for offline use - they'll still auto-update when you run pre-commit.
+## Profile System
+
+The pre-commit configuration uses a profile-based system. Profiles are automatically detected based on repository name or can be specified manually.
+
+### Automatic Detection
+
+The install script detects profiles from your repository name:
+- `cloudformation` or `cfn` in name: CloudFormation profile
+- `terraform` or `tf-` in name: Terraform profile
+- `ansible` in name: Ansible profile
+- `kubernetes`, `k8s`, or `helm` in name: Kubernetes profile
+
+### Manual Profiles
+
+Create a `.pre-commit-profiles` file in your repository root:
+
+```
+kubernetes
+terraform
+```
+
+Available profiles: `base`, `cloudformation`, `terraform`, `ansible`, `kubernetes`
 
 ## Configuration
 
@@ -88,8 +95,6 @@ Or commit them to your repo for offline use - they'll still auto-update when you
 | Input | Description | Default |
 |-------|-------------|---------|
 | `auto_fix` | Auto-commit lint fixes | `true` |
-| `pre_commit_config_url` | Shared pre-commit config URL | `(this repo)` |
-| `yamllint_config_url` | Shared yamllint config URL | `(this repo)` |
 | `checkov_enabled` | Run Checkov security scanning | `true` |
 | `checkov_skip_checks` | Comma-separated checks to skip | `''` |
 | `checkov_framework` | Frameworks to scan | `kubernetes,helm,secrets` |
@@ -99,159 +104,75 @@ Or commit them to your repo for offline use - they'll still auto-update when you
 
 ### Security Enforcement
 
-**Blocking is hardcoded** - security scans always fail on issues:
-- Checkov: `soft_fail: false` (cannot be overridden)
-- Trivy: Always blocks on CRITICAL/HIGH/MEDIUM
+Security scans block merges by default. The workflow enforces:
+- Checkov: Blocks on all findings
+- Trivy: Blocks on CRITICAL, HIGH, and MEDIUM severity
 
-**Caller repos can configure**:
-- Which checks to skip (`checkov_skip_checks`)
-- Which directories to skip (`trivy_skip_dirs`)
-- Which frameworks to scan (`checkov_framework`)
+Configure skip lists to exclude specific checks:
+- `checkov_skip_checks`: Skip specific Checkov checks
+- `trivy_skip_dirs`: Exclude directories from Trivy scans
 
-### Branch Protection Setup
+## GitHub App Setup
 
-Add these required status checks in your repo settings:
+For automatic lint fixes, create a GitHub App:
 
-1. Go to **Settings → Branches → Branch protection rules**
-2. Add rule for `main` branch
-3. Enable "Require status checks to pass before merging"
-4. Add required checks:
-   - `lint-and-security / Lint & Format`
-   - `lint-and-security / Helm Lint`
-   - `lint-and-security / Security Scan` ⚠️ **Important!**
-5. Enable "Require code scanning results"
-6. Add required tools:
-   - `Checkov`
-   - `Trivy`
+1. Settings → Developer settings → GitHub Apps → New App
+2. Configure permissions:
+   - Contents: Read & Write
+   - Pull Requests: Read & Write
+3. Install on your organization or repositories
+4. Generate and download private key
+5. Add secrets to your repository or organization:
+   - `LINT_BOT_APP_ID`: Application ID
+   - `LINT_BOT_PRIVATE_KEY`: Private key content
 
-## GitHub App Setup (Optional)
-
-For auto-fix commits, create a GitHub App:
-
-1. **Settings → Developer settings → GitHub Apps → New App**
-2. Configure:
-   - Name: `lint-bot`
-   - Permissions: `Contents: Read & Write`, `Pull Requests: Read & Write`
-   - Install on organization/repos
-3. Generate private key
-4. Add secrets to your organization/repo:
-   - `LINT_BOT_APP_ID`: App ID from settings
-   - `LINT_BOT_PRIVATE_KEY`: Generated private key
-
-Without GitHub App, the workflow uses `GITHUB_TOKEN` (limited permissions on protected branches).
+Without a GitHub App, the workflow uses GITHUB_TOKEN with limited permissions on protected branches.
 
 ## How It Works
 
-### Workflow Execution Flow
+The workflow runs three parallel jobs:
 
-```mermaid
-graph TD
-    A[PR Created/Updated] --> B{Last commit from lint-bot?}
-    B -->|Yes| C[Skip Lint Job]
-    B -->|No| D[Run Lint Job]
-    D --> E[Pre-commit checks]
-    E --> F{Changes needed?}
-    F -->|Yes| G[Auto-commit fixes]
-    F -->|No| H[Pass]
-    G --> I[Security Scan]
-    C --> I
-    I --> J[Checkov + Trivy]
-    J --> K{Issues found?}
-    K -->|Yes| L[❌ Block Merge]
-    K -->|No| M[✅ Pass]
-```
+1. **Lint & Format**: Runs pre-commit hooks, auto-commits fixes if configured
+2. **Helm Lint**: Validates Helm charts if present
+3. **Security Scan**: Runs Checkov and Trivy, uploads SARIF results
 
-### Loop Prevention
+Loop prevention: The workflow skips linting when the last commit is from lint-bot, preventing infinite auto-fix loops.
 
-The workflow detects lint-bot commits and skips linting to prevent infinite loops:
-- First run: User commit → Lint runs → Auto-fixes → Commits
-- Second run: Bot commit → Lint skips → Security runs → Done
+## Configuration Files
 
-## Shared Configuration Files
+### Pre-commit Profiles
 
-### `.pre-commit-config.yaml`
+Located in `pre-commit/` directory:
+- `base.yaml`: Core hooks for file hygiene, YAML linting, shell checking
+- `cloudformation.yaml`: CloudFormation-specific linting
+- `terraform.yaml`: Terraform validation and security checks
+- `kubernetes.yaml`: Kubernetes manifest validation
+- `ansible.yaml`: Ansible linting and validation
 
-Includes:
-- **File hygiene**: trailing whitespace, end-of-file, large files, secrets
-- **YAML**: yamllint + yamlfmt
-- **Shell**: shellcheck
-- **Markdown**: mdformat
-- **Protection**: no direct commits to main/master
+### yamllint Config
 
-### `.yamllint`
-
-Rules:
+The `.yamllint` file configures YAML validation rules:
 - 2-space indentation
-- Helm template exclusions
-- Flexible quoted strings
-- No line length limits (yamlfmt handles formatting)
-
-## Troubleshooting
-
-### "Waiting for status to be reported"
-
-**Cause**: Missing required status check in branch protection.
-
-**Fix**: Add `lint-and-security / Security Scan` to required checks.
-
-### Checkov finds no issues
-
-**Possible causes**:
-1. No YAML files changed in PR
-2. All checks are skipped via `checkov_skip_checks`
-3. Files are auto-fixed before Checkov runs
-
-**Fix**: Check workflow logs and adjust skip checks.
-
-### Infinite loop of auto-fixes
-
-**Cause**: Bot detection failed or `[skip ci]` removed.
-
-**Fix**: Workflow now detects bot commits by author name and commit message. Ensure you're using the latest version.
-
-### Pre-commit fails locally but passes in CI
-
-**Cause**: Outdated `.pre-commit-config.yaml` or missing tools.
-
-**Fix**: Re-fetch the pre-commit config and reinstall:
-```bash
-curl -o .pre-commit-config.yaml https://raw.githubusercontent.com/darkobas2/lint-test/main/.pre-commit-config.yaml
-pre-commit clean
-pre-commit install
-pre-commit run --all-files
-```
-
-**Note:** The `.yamllint` config auto-syncs on every run via the built-in hook.
+- Excludes Helm templates
+- Disables line length limits
+- Allows flexible quoted strings
 
 ## Examples
 
-### Skip Checkov checks for development
+Skip specific security checks:
 
 ```yaml
 with:
-  checkov_skip_checks: 'CKV_K8S_8,CKV_K8S_9,CKV_K8S_10,CKV_K8S_11'
+  checkov_skip_checks: 'CKV_K8S_8,CKV_K8S_9,CKV_K8S_10'
+  trivy_skip_dirs: '.git,.github,vendor,node_modules'
 ```
 
-### Custom Trivy exclusions
-
-```yaml
-with:
-  trivy_skip_dirs: '.git,.github,vendor,node_modules,test/fixtures'
-```
-
-### Disable auto-fix
+Disable auto-fix:
 
 ```yaml
 with:
   auto_fix: false
 ```
-
-## Contributing
-
-1. Test changes in a branch
-2. Create PR against `main`
-3. Update this README if adding features
-4. Version tag after merging (optional): `git tag v1.x.x`
 
 ## License
 
