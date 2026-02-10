@@ -1,0 +1,11 @@
+repos:
+  - repo: https://github.com/yannh/kubeconform
+    rev: v0.7.0
+    hooks:
+      - id: kubeconform
+        files: '.*\.(yaml|yml)$'
+        exclude: '(charts|templates)/'
+  - repo: https://github.com/gruntwork-io/pre-commit
+    rev: v0.1.30
+    hooks:
+      - id: helmlint
