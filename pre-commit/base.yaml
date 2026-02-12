@@ -45,7 +45,7 @@ repos:
     rev: v0.21.0
     hooks:
       - id: yamlfmt
-        args: ['-formatter', 'line_length=120']
+        args: ['-formatter', 'retain_line_breaks_single=true,line_length=120']
         exclude: (^charts/.*/templates/|^templates/).*\.ya?ml$
 
   # ============================================================
