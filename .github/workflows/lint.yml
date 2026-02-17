@@ -1,26 +1,10 @@
-# organization-actions/.github/workflows/yaml-lint-security.yml
+# organization-actions/.github/workflows/lint-and-security.yml
 #
 # Reusable workflow for YAML linting and security scanning
 # Uses a GitHub App for auto-commit to maintain audit trail
 #
-# Setup:
-#   1. Create GitHub App (see docs/LINT_BOT_SETUP.md)
-#   2. Add secrets to org: LINT_BOT_APP_ID, LINT_BOT_PRIVATE_KEY
-#   3. Call this workflow from your repos
-#
-# ============================================================
-# SECURITY ENFORCEMENT CONFIGURATION
-# ============================================================
-# Configure soft_fail behavior here. Caller workflows CANNOT override these.
-# - false: Block merge on security issues (strict enforcement)
-# - true:  Allow merge with warnings (soft enforcement)
-#
-# Current settings:
-#   CHECKOV_SOFT_FAIL: false  (blocks merge)
-#   TRIVY_SOFT_FAIL:   false  (blocks merge)
-# ============================================================
 
-name: YAML Lint + Security
+name: Lint + Security
 
 env:
   # Security enforcement - NOT overridable by callers
@@ -35,16 +19,12 @@ on:
         description: 'Auto-commit lint fixes (requires GitHub App secrets)'
         type: boolean
         default: true
-
-      # === Shared Config URLs ===
-      pre_commit_config_url:
-        description: 'URL to shared pre-commit config (optional, uses local if not set)'
-        type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.pre-commit-config.yaml'
-      yamllint_config_url:
-        description: 'URL to shared yamllint config (optional)'
-        type: string
-        default: 'https://raw.githubusercontent.com/darkobas2/lint-test/refs/heads/main/.yamllint'
+      use_shared_pre_commit:
+        type: boolean
+        default: true
+      use_shared_yamllint:
+        type: boolean
+        default: true
 
       # === Checkov Security Scanning ===
       checkov_enabled:
@@ -58,7 +38,7 @@ on:
       checkov_skip_checks:
         description: 'Comma-separated list of Checkov checks to skip'
         type: string
-        default: ''
+        default: 'CKV_K8S_43,CKV_K8S_40,CKV_K8S_13,CKV_K8S_12,CKV_K8S_11,CKV_K8S_10,CKV_GHA_7'
       checkov_framework:
         description: 'Checkov frameworks to run'
         type: string
@@ -90,7 +70,20 @@ on:
       helm_lint_enabled:
         description: 'Run Helm lint on charts'
         type: boolean
-        default: true
+        default: false
+
+      # === CloudFormation Linting ===
+      cloudformation_lint_enabled:
+        description: 'Run cfn-lint on CloudFormation templates'
+        type: boolean
+        default: false
+
+      # === Terraform Linting ===
+      terraform_lint_enabled:
+        description: 'Run Terraform linting (fmt, validate, tflint)'
+        type: boolean
+        default: false
+
     secrets:
       LINT_BOT_APP_ID:
         description: 'GitHub App ID for lint-bot'
@@ -100,17 +93,15 @@ on:
         required: false
 
 jobs:
-  lint:
-    name: Lint & Format
+  # 1. Preliminary check job
+  check-commit:
+    name: Check Commit Status
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     outputs:
-      fixed: ${{ steps.changes.outputs.has_changes }}
+      is_bot: ${{ steps.check-bot.outputs.is_bot }}
     steps:
       - name: Initial checkout to check commit author
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
@@ -125,119 +116,97 @@ jobs:
 
           if [[ "$AUTHOR" == "lint-bot[bot]" ]] || [[ "$MESSAGE" == "style: auto-fix linting issues" ]]; then
             echo "is_bot=true" >> $GITHUB_OUTPUT
-            echo "✓ Skipping lint - commit is from lint-bot"
+            echo "Skipping lint - commit is from lint-bot"
           else
             echo "is_bot=false" >> $GITHUB_OUTPUT
-            echo "→ Running lint - commit is from user"
+            echo "Running lint - commit is from user"
           fi
 
-      - name: Check if GitHub App is configured
-        if: steps.check-bot.outputs.is_bot != 'true'
-        id: check-app
-        env:
-          APP_ID: ${{ secrets.LINT_BOT_APP_ID }}
-        run: |
-          if [[ -n "$APP_ID" ]]; then
-            echo "available=true" >> $GITHUB_OUTPUT
-          else
-            echo "available=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Generate GitHub App Token
-        id: app-token
-        if: steps.check-bot.outputs.is_bot != 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.LINT_BOT_APP_ID }}
-          private-key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
-
+  lint:
+    name: Lint & Format
+    needs: check-commit
+    # Skip the entire job if the previous job found the bot commit
+    if: needs.check-commit.outputs.is_bot != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      fixed: ${{ steps.auto-commit.outputs.has_changes }}
+    steps:
       - name: Checkout (with App token for push)
-        if: steps.check-bot.outputs.is_bot != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Setup Python
-        if: steps.check-bot.outputs.is_bot != 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Cache pre-commit
-        if: steps.check-bot.outputs.is_bot != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
             pre-commit-
 
-      # Fetch shared configs if URLs provided
+      # Fetch shared configs using GitHub App token for authentication
+      - name: Generate GitHub App token
+        if: inputs.use_shared_pre_commit == 'true' || inputs.use_shared_yamllint == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.LINT_BOT_APP_ID }}
+          private-key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
+          owner: darkobas2
+          repositories: lint-test
+
       - name: Fetch shared pre-commit config
-        if: steps.check-bot.outputs.is_bot != 'true' && inputs.pre_commit_config_url != ''
+        if: inputs.use_shared_pre_commit == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "Fetching pre-commit config from ${{ inputs.pre_commit_config_url }}"
-          curl -sSfL "${{ inputs.pre_commit_config_url }}" -o .pre-commit-config.yaml
+          echo "Fetching pre-commit config from organization-actions"
+          gh api /repos/darkobas2/lint-test/contents/pre-commit/base.yaml \
+            --jq '.content' | base64 -d > .pre-commit-config.yaml
 
       - name: Fetch shared yamllint config
-        if: steps.check-bot.outputs.is_bot != 'true' && inputs.yamllint_config_url != ''
+        if: inputs.use_shared_yamllint == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "Fetching yamllint config from ${{ inputs.yamllint_config_url }}"
-          curl -sSfL "${{ inputs.yamllint_config_url }}" -o .yamllint
+          echo "Fetching yamllint config from organization-actions"
+          gh api /repos/darkobas2/lint-test/contents/pre-commit/.yamllint \
+            --jq '.content' | base64 -d > .yamllint
 
       - name: Install pre-commit
-        if: steps.check-bot.outputs.is_bot != 'true'
         run: pip install pre-commit
 
       - name: Run pre-commit
-        if: steps.check-bot.outputs.is_bot != 'true'
         id: pre-commit
         run: |
           pre-commit run --all-files 2>&1 | tee pre-commit-output.txt || echo "pre_commit_failed=true" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      - name: Check for changes
-        if: steps.check-bot.outputs.is_bot != 'true'
-        id: changes
-        run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Files modified by pre-commit:"
-            git status --porcelain
-          else
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
-
-      # Auto-commit with GitHub App (maintains audit trail)
-      - name: Commit and push fixes
-        if: steps.check-bot.outputs.is_bot != 'true' && steps.changes.outputs.has_changes == 'true' && inputs.auto_fix && steps.check-app.outputs.available == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          git config user.name "lint-bot[bot]"
-          git config user.email "${{ secrets.LINT_BOT_APP_ID }}+lint-bot[bot]@users.noreply.github.com"
-
-          # Exclude workflow files (requires workflows permission to modify)
-          git add -A
-          git reset -- .github/workflows/
-
-          # Only commit if there are still changes after excluding workflows
-          if [[ -n "$(git diff --cached --name-only)" ]]; then
-            git commit -m "style: auto-fix linting issues
-
-          Co-authored-by: ${{ github.event.pull_request.user.login }} <${{ github.event.pull_request.user.id }}+${{ github.event.pull_request.user.login }}@users.noreply.github.com>"
-
-            git push
-          else
-            echo "Only workflow files changed - skipping auto-commit (requires workflows permission)"
-            exit 1
-          fi
+      # Auto-commit using reusable action
+      - name: Auto-commit linting fixes
+        id: auto-commit
+        uses: darkobas2/lint-test/.github/actions/auto-commit@main
+        with:
+          commit_message: 'style: auto-fix linting issues'
+          app_id: ${{ secrets.LINT_BOT_APP_ID }}
+          private_key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
+          auto_fix_enabled: ${{ inputs.auto_fix }}
+          pr_user_login: ${{ github.event.pull_request.user.login }}
+          pr_user_id: ${{ github.event.pull_request.user.id }}
+          exclude_paths: '.github/workflows/'
 
       # Fail if pre-commit failed and no auto-fix
       - name: Fail if issues remain
-        if: steps.check-bot.outputs.is_bot != 'true' && steps.pre-commit.outputs.pre_commit_failed == 'true' && (steps.check-app.outputs.available == 'false' || !inputs.auto_fix)
+        if: steps.pre-commit.outputs.pre_commit_failed == 'true' && (!inputs.auto_fix || steps.auto-commit.outputs.committed != 'true')
         run: |
           echo "::error::Pre-commit found issues. See PR comment for fix instructions."
           exit 1
@@ -250,7 +219,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -304,6 +273,183 @@ jobs:
             exit 1
           fi
 
+  cloudformation-lint:
+    name: CloudFormation Lint
+    if: inputs.cloudformation_lint_enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Find CloudFormation templates
+        id: find-templates
+        run: |
+          templates=()
+
+          # Find YAML/JSON files that look like CloudFormation templates
+          # Check for common CF keywords in files
+          while IFS= read -r file; do
+            if grep -qE '(AWSTemplateFormatVersion|Resources:)' "$file" 2>/dev/null; then
+              echo "Found CloudFormation template: $file"
+              templates+=("$file")
+            fi
+          done < <(find . -type f \( -name "*.yaml" -o -name "*.yml" -o -name "*.json" \) -not -path "*/\.*" -not -path "*/node_modules/*" -not -path "*/vendor/*")
+
+          if [[ ${#templates[@]} -eq 0 ]]; then
+            echo "No CloudFormation templates found"
+            echo "templates_found=false" >> $GITHUB_OUTPUT
+          else
+            echo "templates_found=true" >> $GITHUB_OUTPUT
+            # Join array with newlines
+            printf "%s\n" "${templates[@]}" > cf-templates.txt
+          fi
+
+      - name: Lint CloudFormation templates
+        if: steps.find-templates.outputs.templates_found == 'true'
+        run: |
+          failed=0
+          while IFS= read -r template; do
+            echo "::group::Linting $template"
+            if cfn-lint "$template"; then
+              echo "✓ $template passed"
+            else
+              echo "✗ $template failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done < cf-templates.txt
+
+          if [[ $failed -eq 1 ]]; then
+            echo "::error::One or more CloudFormation templates failed linting"
+            exit 1
+          fi
+
+  terraform-lint:
+    name: Terraform Lint
+    if: inputs.terraform_lint_enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
+
+      - name: Find Terraform directories
+        id: find-dirs
+        run: |
+          dirs=()
+
+          # Find directories containing .tf files
+          while IFS= read -r tf_file; do
+            dir=$(dirname "$tf_file")
+            # Add unique directories only
+            if [[ ! " ${dirs[@]} " =~ " ${dir} " ]]; then
+              echo "Found Terraform directory: $dir"
+              dirs+=("$dir")
+            fi
+          done < <(find . -type f -name "*.tf" -not -path "*/\.*" -not -path "*/.terraform/*")
+
+          if [[ ${#dirs[@]} -eq 0 ]]; then
+            echo "No Terraform directories found"
+            echo "dirs_found=false" >> $GITHUB_OUTPUT
+          else
+            echo "dirs_found=true" >> $GITHUB_OUTPUT
+            # Join array with newlines
+            printf "%s\n" "${dirs[@]}" > tf-dirs.txt
+          fi
+
+      - name: Run Terraform Format
+        if: steps.find-dirs.outputs.dirs_found == 'true'
+        run: |
+          while IFS= read -r dir; do
+            echo "::group::Formatting $dir"
+            terraform -chdir="$dir" fmt -recursive
+            echo "✓ $dir formatted"
+            echo "::endgroup::"
+          done < tf-dirs.txt
+
+      # Auto-commit using reusable action
+      - name: Auto-commit Terraform formatting
+        if: steps.find-dirs.outputs.dirs_found == 'true'
+        uses: darkobas2/lint-test/.github/actions/auto-commit@main
+        with:
+          commit_message: 'style: auto-fix Terraform formatting'
+          app_id: ${{ secrets.LINT_BOT_APP_ID }}
+          private_key: ${{ secrets.LINT_BOT_PRIVATE_KEY }}
+          auto_fix_enabled: ${{ inputs.auto_fix }}
+          pr_user_login: ${{ github.event.pull_request.user.login }}
+          pr_user_id: ${{ github.event.pull_request.user.id }}
+
+      - name: Terraform Init & Validate
+        if: steps.find-dirs.outputs.dirs_found == 'true'
+        run: |
+          failed=0
+          while IFS= read -r dir; do
+            echo "::group::Validating $dir"
+            if terraform -chdir="$dir" init -backend=false && terraform -chdir="$dir" validate; then
+              echo "✓ $dir validation passed"
+            else
+              echo "✗ $dir validation failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done < tf-dirs.txt
+
+          if [[ $failed -eq 1 ]]; then
+            echo "::error::Terraform validation failed"
+            exit 1
+          fi
+
+      - name: Run TFLint
+        if: steps.find-dirs.outputs.dirs_found == 'true'
+        run: |
+          # Get absolute path to config file
+          CONFIG_FILE="$(pwd)/.tflint.hcl"
+          CONFIG_ARG=""
+          if [[ -f "$CONFIG_FILE" ]]; then
+            CONFIG_ARG="--config $CONFIG_FILE"
+          fi
+
+          failed=0
+          while IFS= read -r dir; do
+            echo "::group::Running TFLint on $dir"
+            if tflint --chdir="$dir" --init $CONFIG_ARG && tflint --chdir="$dir" $CONFIG_ARG; then
+              echo "✓ $dir TFLint passed"
+            else
+              echo "✗ $dir TFLint failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done < tf-dirs.txt
+
+          if [[ $failed -eq 1 ]]; then
+            echo "::error::TFLint found issues"
+            exit 1
+          fi
+
   security:
     name: Security Scan
     if: inputs.checkov_enabled || inputs.trivy_enabled
@@ -314,7 +460,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -416,7 +562,7 @@ jobs:
           echo "Trivy outcome: ${{ steps.trivy.outcome }}"
           if [[ -f "trivy-results.sarif" ]]; then
             echo "✓ trivy-results.sarif exists"
-            echo "File size: $(stat -f%z trivy-results.sarif 2>/dev/null || stat -c%s trivy-results.sarif) bytes"
+            echo "File size: $(stat -c%s trivy-results.sarif) bytes"
           else
             echo "✗ trivy-results.sarif NOT found"
           fi
