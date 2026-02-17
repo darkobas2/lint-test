@@ -1,0 +1,118 @@
+name: 'Auto-commit fixes'
+description: 'Checks for changes and commits them using lint-bot GitHub App'
+
+inputs:
+  commit_message:
+    description: 'Commit message for the auto-fix'
+    required: true
+  app_id:
+    description: 'GitHub App ID'
+    required: true
+  private_key:
+    description: 'GitHub App private key'
+    required: true
+  auto_fix_enabled:
+    description: 'Whether auto-fix is enabled'
+    required: true
+  pr_user_login:
+    description: 'PR author login'
+    required: false
+    default: ''
+  pr_user_id:
+    description: 'PR author ID'
+    required: false
+    default: ''
+  exclude_paths:
+    description: 'Paths to exclude from commit (space-separated)'
+    required: false
+    default: ''
+
+outputs:
+  has_changes:
+    description: 'Whether changes were detected'
+    value: ${{ steps.changes.outputs.has_changes }}
+  committed:
+    description: 'Whether changes were committed'
+    value: ${{ steps.commit.outputs.committed }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check if GitHub App is configured
+      id: check-app
+      shell: bash
+      run: |
+        if [[ -n "${{ inputs.app_id }}" ]]; then
+          echo "available=true" >> $GITHUB_OUTPUT
+        else
+          echo "available=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Generate GitHub App Token
+      id: app-token
+      if: inputs.auto_fix_enabled == 'true' && steps.check-app.outputs.available == 'true'
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.private_key }}
+
+    - name: Check for changes
+      id: changes
+      shell: bash
+      run: |
+        if [[ -n "$(git status --porcelain)" ]]; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "Changes detected:"
+          git status --porcelain
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+          echo "No changes to commit"
+        fi
+
+    - name: Commit and push fixes
+      id: commit
+      if: steps.changes.outputs.has_changes == 'true' && inputs.auto_fix_enabled == 'true' && steps.check-app.outputs.available == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        git config user.name "lint-bot[bot]"
+        git config user.email "${{ inputs.app_id }}+lint-bot[bot]@users.noreply.github.com"
+
+        git add -A
+
+        # Exclude specified paths if provided
+        if [[ -n "${{ inputs.exclude_paths }}" ]]; then
+          for path in ${{ inputs.exclude_paths }}; do
+            git reset -- "$path"
+          done
+        fi
+
+        # Check if there are still changes after exclusions
+        if [[ -z "$(git diff --cached --name-only)" ]]; then
+          echo "Only excluded files changed - skipping commit"
+          exit 1
+        fi
+
+        # Build co-author line if PR info available
+        CO_AUTHOR=""
+        if [[ -n "${{ inputs.pr_user_login }}" ]]; then
+          CO_AUTHOR="Co-authored-by: ${{ inputs.pr_user_login }} <${{ inputs.pr_user_id }}+${{ inputs.pr_user_login }}@users.noreply.github.com>"
+        fi
+
+        # Create commit message
+        if [[ -n "$CO_AUTHOR" ]]; then
+          git commit -m "${{ inputs.commit_message }}" -m "" -m "$CO_AUTHOR"
+        else
+          git commit -m "${{ inputs.commit_message }}"
+        fi
+
+        git push
+        echo "committed=true" >> $GITHUB_OUTPUT
+
+    - name: Fail if issues remain
+      if: steps.changes.outputs.has_changes == 'true' && (steps.check-app.outputs.available == 'false' || inputs.auto_fix_enabled != 'true')
+      shell: bash
+      run: |
+        echo "::error::Formatting issues found but auto-fix is not enabled or GitHub App not configured."
+        exit 1
