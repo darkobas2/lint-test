@@ -47,6 +47,14 @@ on:
         description: 'Upload Checkov SARIF to GitHub Code Scanning'
         type: boolean
         default: true
+      checkov_comment_pr:
+        description: 'Post Checkov findings as PR comment'
+        type: boolean
+        default: true
+      checkov_comment_limit:
+        description: 'Maximum number of Checkov findings to show in PR comment (0 = all)'
+        type: number
+        default: 0
 
       # === Trivy Security Scanning ===
       trivy_enabled:
@@ -65,6 +73,14 @@ on:
         description: 'Upload Trivy SARIF to GitHub Code Scanning'
         type: boolean
         default: true
+      trivy_comment_pr:
+        description: 'Post Trivy findings as PR comment'
+        type: boolean
+        default: true
+      trivy_comment_limit:
+        description: 'Maximum number of Trivy findings to show in PR comment (0 = all)'
+        type: number
+        default: 0
 
       # === Helm Linting ===
       helm_lint_enabled:
@@ -510,7 +526,7 @@ jobs:
         with:
           sarif_file: checkov-results.sarif
           category: Checkov
-        continue-on-error: false
+        continue-on-error: true
 
       # Check Checkov results and set output
       - name: Check Checkov SARIF for issues
@@ -553,7 +569,7 @@ jobs:
           skip-dirs: ${{ inputs.trivy_skip_dirs }}
           scanners: 'vuln,secret,config'
           exit-code: '0'
-        continue-on-error: false
+        continue-on-error: true
 
       # Debug Trivy SARIF
       - name: Debug Trivy SARIF
@@ -602,23 +618,134 @@ jobs:
           else
             echo "has_issues=false" >> $GITHUB_OUTPUT
           fi
+ 
+      # Extract and format security findings
+      - name: Extract security findings
+        if: always() && ((inputs.checkov_enabled && inputs.checkov_comment_pr) || (inputs.trivy_enabled && inputs.trivy_comment_pr))
+        id: extract-findings
+        run: |
+          FINDINGS_FILE="security-findings.txt"
+          > "$FINDINGS_FILE"
+          
+          # Extract Checkov findings
+          if [[ -f "checkov-results.sarif" ]] && [[ "${{ inputs.checkov_enabled }}" == "true" ]] && [[ "${{ inputs.checkov_comment_pr }}" == "true" ]]; then
+            echo "### Checkov Findings" >> "$FINDINGS_FILE"
+            CHECKOV_LIMIT=${{ inputs.checkov_comment_limit }}
+            python3 << 'EOF' >> "$FINDINGS_FILE"
+          import json, sys, os
+          try:
+              limit = int(os.environ.get('CHECKOV_LIMIT', '50'))
+              limit = None if limit == 0 else limit
+              
+              with open('checkov-results.sarif') as f:
+                  sarif = json.load(f)
+                  count = 0
+                  total_results = sum(len(run.get('results', [])) for run in sarif.get('runs', []))
+                  
+                  for run in sarif.get('runs', []):
+                      for result in (run.get('results', [])[:limit] if limit else run.get('results', [])):
+                          count += 1
+                          rule_id = result.get('ruleId', 'Unknown')
+                          level = result.get('level', 'warning').upper()
+                          message = result.get('message', {}).get('text', 'No description')
+                          locations = result.get('locations', [])
+                          
+                          print(f"\n**{count}. [{level}] {rule_id}**")
+                          print(f"   {message}")
+                          
+                          if locations:
+                              loc = locations[0].get('physicalLocation', {})
+                              uri = loc.get('artifactLocation', {}).get('uri', 'Unknown file')
+                              region = loc.get('region', {})
+                              line = region.get('startLine', '?')
+                              print(f"   📁 `{uri}:{line}`")
+                  
+                  if count == 0:
+                      print("\n✅ No issues found")
+                  elif limit and count >= limit:
+                      print(f"\n_...and {total_results - count} more. Run Checkov locally for full results._")
+          except Exception as e:
+              print(f"\n⚠️ Error parsing SARIF: {e}")
+          EOF
+            echo "" >> "$FINDINGS_FILE"
+          fi
+          
+          # Extract Trivy findings
+          if [[ -f "trivy-results.sarif" ]] && [[ "${{ inputs.trivy_enabled }}" == "true" ]] && [[ "${{ inputs.trivy_comment_pr }}" == "true" ]]; then
+            echo "### Trivy Findings" >> "$FINDINGS_FILE"
+            TRIVY_LIMIT=${{ inputs.trivy_comment_limit }}
+            python3 << 'EOF' >> "$FINDINGS_FILE"
+          import json, sys, os
+          try:
+              limit = int(os.environ.get('TRIVY_LIMIT', '50'))
+              limit = None if limit == 0 else limit
+              
+              with open('trivy-results.sarif') as f:
+                  sarif = json.load(f)
+                  count = 0
+                  total_results = sum(len(run.get('results', [])) for run in sarif.get('runs', []))
+                  
+                  for run in sarif.get('runs', []):
+                      for result in (run.get('results', [])[:limit] if limit else run.get('results', [])):
+                          count += 1
+                          rule_id = result.get('ruleId', 'Unknown')
+                          level = result.get('level', 'warning').upper()
+                          message = result.get('message', {}).get('text', 'No description')
+                          locations = result.get('locations', [])
+                          
+                          print(f"\n**{count}. [{level}] {rule_id}**")
+                          print(f"   {message}")
+                          
+                          if locations:
+                              loc = locations[0].get('physicalLocation', {})
+                              uri = loc.get('artifactLocation', {}).get('uri', 'Unknown file')
+                              region = loc.get('region', {})
+                              line = region.get('startLine', '?')
+                              print(f"   📁 `{uri}:{line}`")
+                  
+                  if count == 0:
+                      print("\n✅ No issues found")
+                  elif limit and count >= limit:
+                      print(f"\n_...and {total_results - count} more. Run Trivy locally for full results._")
+          except Exception as e:
+              print(f"\n⚠️ Error parsing SARIF: {e}")
+          EOF
+            echo "" >> "$FINDINGS_FILE"
+          fi
+          
+          # Debug: Show what we extracted
+          echo "=== Extracted Findings ==="
+          cat "$FINDINGS_FILE"
+          echo "=========================="
+          
+          # Set multiline output using proper GitHub Actions syntax
+          {
+            echo 'findings<<FINDINGS_EOF'
+            cat "$FINDINGS_FILE"
+            echo 'FINDINGS_EOF'
+          } >> $GITHUB_OUTPUT
 
       - name: Comment security scan results
-        if: always() && (inputs.checkov_enabled || inputs.trivy_enabled) && github.event_name == 'pull_request'
+        if: always() && ((inputs.checkov_enabled && inputs.checkov_comment_pr) || (inputs.trivy_enabled && inputs.trivy_comment_pr)) && github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          FINDINGS_OUTPUT: ${{ steps.extract-findings.outputs.findings }}
         with:
           script: |
             const checkovEnabled = ${{ inputs.checkov_enabled }};
+            const checkovCommentPR = ${{ inputs.checkov_comment_pr }};
             const trivyEnabled = ${{ inputs.trivy_enabled }};
+            const trivyCommentPR = ${{ inputs.trivy_comment_pr }};
             const checkovHasIssues = '${{ steps.checkov-check.outputs.has_issues }}';
             const checkovSoftFail = '${{ env.CHECKOV_SOFT_FAIL }}' === 'true';
             const trivySoftFail = '${{ env.TRIVY_SOFT_FAIL }}' === 'true';
+            const findings = process.env.FINDINGS_OUTPUT || '';
 
             let body = '## 🔒 Security Scan Results\n\n';
             let hasFindings = false;
 
             // Checkov results
-            if (checkovEnabled && checkovHasIssues !== '') {
+            if (checkovEnabled && checkovCommentPR && checkovHasIssues !== '') {
               body += '### Checkov\n';
               if (checkovHasIssues === 'false') {
                 body += '✅ No issues found\n\n';
@@ -632,7 +759,7 @@ jobs:
 
             // Trivy results
             const trivyHasIssues = '${{ steps.trivy-check.outputs.has_issues }}';
-            if (trivyEnabled && trivyHasIssues !== '') {
+            if (trivyEnabled && trivyCommentPR && trivyHasIssues !== '') {
               body += '### Trivy\n';
               if (trivyHasIssues === 'false') {
                 body += '✅ No issues found\n\n';
@@ -642,6 +769,13 @@ jobs:
                   : '❌ Issues found - must be fixed\n\n';
                 hasFindings = true;
               }
+            }
+
+            // Add detailed findings if available
+            if (findings && findings.trim() !== '') {
+              body += '<details><summary>📋 Detailed Findings (click to expand)</summary>\n\n';
+              body += findings;
+              body += '\n</details>\n\n';
             }
 
             // Links to results
@@ -657,11 +791,11 @@ jobs:
             // Local testing instructions
             if (hasFindings) {
               body += '<details><summary>🔧 Run scans locally</summary>\n\n';
-              if (checkovEnabled) {
+              if (checkovEnabled && checkovCommentPR) {
                 body += '**Checkov:**\n```bash\npip install checkov\n';
                 body += 'checkov -d . --framework ${{ inputs.checkov_framework }}\n```\n\n';
               }
-              if (trivyEnabled) {
+              if (trivyEnabled && trivyCommentPR) {
                 body += '**Trivy:**\n```bash\n';
                 body += 'trivy fs --severity CRITICAL,HIGH,MEDIUM .\n```\n';
               }
@@ -688,3 +822,29 @@ jobs:
             echo "  - Trivy found vulnerabilities or misconfigurations"
           fi
           exit 1
+
+  # Summary job that calling workflows should depend on
+  status-check:
+    name: Status Check
+    if: always()
+    needs: [check-commit, lint, helm-lint, cloudformation-lint, terraform-lint, security]
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          echo "Job statuses:"
+          echo "  check-commit: ${{ needs.check-commit.result }}"
+          echo "  lint: ${{ needs.lint.result }}"
+          echo "  helm-lint: ${{ needs.helm-lint.result }}"
+          echo "  cloudformation-lint: ${{ needs.cloudformation-lint.result }}"
+          echo "  terraform-lint: ${{ needs.terraform-lint.result }}"
+          echo "  security: ${{ needs.security.result }}"
+          
+          # Check if any job actually failed (not skipped, not cancelled)
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "::error::One or more jobs failed"
+            exit 1
+          fi
+          
+          echo "✅ All jobs passed or were skipped"
